@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  panel:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - PORT=${PORT:-8080}
+      - DB_PATH=/app/data/panel.db
+      - RAILWAY_PUBLIC_DOMAIN=${RAILWAY_PUBLIC_DOMAIN:-}
+      - RAILWAY_PROJECT_NAME=${RAILWAY_PROJECT_NAME:-}
+      - RAILWAY_SERVICE_NAME=${RAILWAY_SERVICE_NAME:-}
+    volumes:
+      - panel_data:/app/data
+      - xray_config:/etc/xray
+      - xray_logs:/var/log/xray
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  panel_data:
+  xray_config:
+  xray_logs:
+
+networks:
+  default:
+    name: railway-vless-network
