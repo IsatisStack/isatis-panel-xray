@@ -2,9 +2,9 @@
 
 # ⚡ IsatisStackTeam
 
-### پنل حرفه‌ای ساخت و مدیریت کانفیگ
+### پنل حرفه‌ای ساخت و مدیریت کانفیگ ایساتیس استک
 
-یک پنل تحت وب، سبک و کاملاً رایگان — بدون نیاز به نصب یا سرور جداگانه، فقط با یک فایل HTML.
+پنل رایگان برای ساخت کانفیگ های V2ray با استفاده از RailWay با پینگ پایین و سرور های آمریکا،هلند،سنگاپور
 
 [![Telegram](https://img.shields.io/badge/Telegram-IsatisStackTeam-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://telegram.me/IsatisStackTeam)
 [![YouTube](https://img.shields.io/badge/YouTube-IsatisStackTeam-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/@IsatisStack)
