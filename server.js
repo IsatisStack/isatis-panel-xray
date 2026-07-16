@@ -6,13 +6,10 @@ const cookieParser = require('cookie-parser');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
-const httpProxy = require('http-proxy');
 
 const app = express();
 const server = http.createServer(app);
-const proxy = httpProxy.createProxyServer({});
 
-// ========== تنظیمات محیطی ==========
 const PORT = process.env.PORT || 3000;
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS || 'admin';
@@ -21,7 +18,6 @@ const DB_PATH = process.env.DB_PATH || './data/configs.db';
 const COOKIE_NAME = 'panel_auth';
 const COOKIE_VALUE = 'authenticated';
 
-// ساخت پوشه دیتا
 if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
 
 const db = new sqlite3.Database(DB_PATH);
@@ -30,7 +26,6 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 app.use(cookieParser());
 
-// ساخت جدول کانفیگ‌ها
 db.run(`
   CREATE TABLE IF NOT EXISTS configs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,13 +43,11 @@ db.run(`
   )
 `);
 
-// میان‌افزار احراز هویت
 function requireAuth(req, res, next) {
   if (req.cookies[COOKIE_NAME] === COOKIE_VALUE) return next();
   res.redirect('/dash');
 }
 
-// ========== روت‌های عمومی ==========
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/public/index.html');
 });
@@ -77,7 +70,6 @@ app.get('/logout', (req, res) => {
   res.redirect('/dash');
 });
 
-// ========== روت‌های محافظت‌شده داشبورد ==========
 app.get('/dash/view', requireAuth, (req, res) => {
   res.sendFile(__dirname + '/public/dash-view.html');
 });
@@ -93,6 +85,9 @@ app.post('/save', requireAuth, (req, res) => {
   let { username, address, port, uuid, protocol, host, path, tls, fp, alpn } = req.body;
   if (!path.startsWith('/')) path = '/' + path;
 
+  // Railway فقط با http/1.1 برای WebSocket پایدار کار می‌کند
+  if (alpn === 'h2' || alpn === 'h3') alpn = 'http/1.1';
+
   db.run(
     `INSERT INTO configs (username, address, port, uuid, protocol, host, path, tls, fp, alpn) 
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -100,7 +95,6 @@ app.post('/save', requireAuth, (req, res) => {
     function(err) {
       if (err) return res.status(500).send('خطای دیتابیس: ' + err.message);
 
-      // ساخت لینک کانفیگ با فرمت استاندارد
       const params = new URLSearchParams();
       params.set('encryption', 'none');
       params.set('security', tls);
@@ -111,7 +105,7 @@ app.post('/save', requireAuth, (req, res) => {
       params.set('allowInsecure', '0');
       params.set('type', protocol);
       params.set('host', host);
-      params.set('path', path);
+      params.set('path', path + '/' + uuid);
       if (protocol === 'xhttp') params.set('mode', 'auto');
 
       const link = `vless://${uuid}@${address}:${port}?${params.toString()}#${encodeURIComponent(username)}`;
@@ -126,7 +120,6 @@ app.post('/save', requireAuth, (req, res) => {
   );
 });
 
-// ========== مدیریت Xray ==========
 function createInbound(row) {
   const internalPort = XRAY_BASE_PORT + row.id;
   const inbound = {
@@ -174,7 +167,6 @@ function regenerateXrayConfig() {
 
       const inbounds = rows.map(createInbound);
 
-      // اگر هیچ کانفیگی نیست، یک inbound پوشه بسازیم که Xray خطا نده
       if (inbounds.length === 0) {
         inbounds.push({
           listen: "127.0.0.1",
@@ -208,7 +200,6 @@ function regenerateXrayConfig() {
   });
 }
 
-// نقشه مسیر به پورت داخلی Xray
 let pathToPortMap = {};
 
 function updatePathMap(rows) {
@@ -241,21 +232,33 @@ function restartXray() {
   xrayProcess.on('exit', code => console.log('Xray exited with code', code));
 }
 
-// ========== پراکسی ترافیک VPN به Xray ==========
+// پراکسی HTTP معمولی به Xray
 app.use((req, res) => {
   const targetPort = getTargetPort(req.path);
   if (!targetPort) {
     return res.status(404).send('Not found');
   }
 
-  proxy.web(req, res, { target: `http://127.0.0.1:${targetPort}` }, (err) => {
-    if (err) {
-      console.error('Proxy error:', err);
-      res.status(502).send('Xray proxy error');
-    }
+  const proxyReq = http.request({
+    hostname: '127.0.0.1',
+    port: targetPort,
+    path: req.url,
+    method: req.method,
+    headers: req.headers
+  }, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res);
   });
+
+  proxyReq.on('error', (err) => {
+    console.error('HTTP proxy error:', err.message);
+    if (!res.headersSent) res.status(502).send('Proxy error');
+  });
+
+  req.pipe(proxyReq);
 });
 
+// پراکسی WebSocket با raw socket
 server.on('upgrade', (req, socket, head) => {
   const targetPort = getTargetPort(req.url);
   if (!targetPort) {
@@ -263,13 +266,58 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
 
-  proxy.ws(req, socket, head, { target: `http://127.0.0.1:${targetPort}` }, (err) => {
-    console.error('WS Proxy error:', err);
+  const proxyReq = http.request({
+    hostname: '127.0.0.1',
+    port: targetPort,
+    path: req.url,
+    method: req.method,
+    headers: req.headers
+  });
+
+  proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\n`);
+    Object.keys(proxyRes.headers).forEach(key => {
+      socket.write(`${key}: ${proxyRes.headers[key]}\r\n`);
+    });
+    socket.write('\r\n');
+
+    if (proxyHead && proxyHead.length) proxySocket.unshift(proxyHead);
+    if (head && head.length) socket.unshift(head);
+
+    proxySocket.pipe(socket);
+    socket.pipe(proxySocket);
+
+    proxySocket.on('error', err => {
+      console.error('proxySocket error:', err.message);
+      socket.destroy();
+    });
+    socket.on('error', err => {
+      console.error('clientSocket error:', err.message);
+      proxySocket.destroy();
+    });
+    proxySocket.on('close', () => socket.destroy());
+    socket.on('close', () => proxySocket.destroy());
+  });
+
+  proxyReq.on('error', err => {
+    console.error('WS upgrade request error:', err.message);
     socket.destroy();
   });
+
+  proxyReq.on('response', res => {
+    if (!socket.destroyed) {
+      socket.write(`HTTP/1.1 ${res.statusCode} ${res.statusMessage}\r\n`);
+      Object.keys(res.headers).forEach(key => {
+        socket.write(`${key}: ${res.headers[key]}\r\n`);
+      });
+      socket.write('\r\n');
+      res.pipe(socket);
+    }
+  });
+
+  req.pipe(proxyReq);
 });
 
-// ========== استارت سرور ==========
 (async () => {
   await regenerateXrayConfig();
   restartXray();

@@ -10,7 +10,6 @@
     "sqlite3": "^5.1.6",
     "body-parser": "^1.20.2",
     "cookie-parser": "^1.4.6",
-    "http-proxy": "^1.18.1",
     "dotenv": "^16.3.1"
   }
 }
